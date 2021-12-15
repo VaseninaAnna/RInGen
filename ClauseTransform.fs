@@ -838,4 +838,4 @@ let toClauses (options : transformOptions) commands =
     if not options.sync_terms && not options.tta_transform then trCtx else
     let syncClauses = Synchronization.synchronize clausesWithPreamble
     let ttaClauses = TTA.synchronize clausesWithPreamble
-    {trCtx with commands = syncClauses}
+    {trCtx with commands = ttaClauses}

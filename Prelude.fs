@@ -210,6 +210,7 @@ let ArraySort(s1, s2) = CompoundSort("Array", [s1; s2])
 let boolSort = PrimitiveSort(symbol("Bool"))
 let integerSort = PrimitiveSort(symbol("Int"))
 let dummySort = PrimitiveSort(symbol("*dummy-sort*"))
+let emptySort = PrimitiveSort(symbol(" "))
 
 module Sort =
     let gensym = function
