@@ -1,4 +1,5 @@
 module RInGen.ClauseTransform
+open System.Collections.Generic
 open RInGen
 open RInGen.IntToNat
 open RInGen.Typer
@@ -793,6 +794,9 @@ module SubstituteLemmas =
             |> List.map FOLOriginalCommand
         | OriginalCommand c -> [FOLOriginalCommand c]
         | TransformedCommand(Rule(qs, body, head)) -> mapRule lemmasMap qs body head |> folAssert |> Option.toList
+        | TransformedCommand(Assertion(qs, body)) ->
+            let folList = List.map (fun x -> FOLAtom(x)) body |> folAnd
+            [FOLAssertion(qs, folList)]
         | LemmaCommand _ -> []
 
     let private collectAllLemmas commands =
