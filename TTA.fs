@@ -20,31 +20,6 @@ let funcs = List.map Operation.declareOp [notFunc; andFunc; initFunc]
 let isFinalRel = Operation.makeElementaryRelationFromSorts (gensymp "isFinal") [state_sort]
 let transitionEq = equal_op state_sort
 
-
-type private ruleCloser ( ) =
-    // TODO: remove copypast from synchronization.fs
-    member private x.CollectFreeVarsInTerm = function
-        | TIdent(i, s) -> [i, s]
-        | TConst _ -> []
-        | TApply(_, ts) -> x.CollectFreeVarsInTerms ts
-
-    member private x.CollectFreeVarsInTerms = List.collect x.CollectFreeVarsInTerm
-
-    member private x.CollectFreeVarsInAtom = function
-        | AApply(_, ts) -> x.CollectFreeVarsInTerms ts
-        | Equal _ | Distinct _ -> __unreachable__()
-        | _ -> []    
-        
-    member x.MakeClosedRule(body, head) : rule =
-        // forall quantifiers around all vars
-        let freeVars = head::body |> List.collect x.CollectFreeVarsInAtom |> Set.ofList |> Set.toList
-        rule freeVars body head
-        
-    member x.MakeClosedAssertion(body) : rule =
-        let freeVars = body |> List.collect x.CollectFreeVarsInAtom |> Set.ofList |> Set.toList
-        let qs = Quantifiers.forall freeVars
-        Assertion(qs, body)
-
 type private TTAaxioms ( ) =
     let rules = Dictionary()
     let ruleCloser = ruleCloser()

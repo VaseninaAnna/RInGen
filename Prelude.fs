@@ -623,14 +623,41 @@ type rule =
             | _ -> sprintf "(=>\t(and %s)\n\t\t%O)" (xs |> List.map toString |> join "\n\t\t\t") x
             |> Quantifiers.toString qs
         | Assertion(qs, xs) ->
-            sprintf "((and %s)\n\t\t%O)" (xs |> List.map toString |> join "\n\t\t\t")
+            match xs with
+            | [] -> ""
+            | [y] -> $"{y}"
+            | _ -> sprintf "(and %s)" (xs |> List.map toString |> join "\n\t\t\t")
             |> Quantifiers.toString qs
- 
 let private baseRule q fromAtoms toAtom =
     let fromAtoms = List.filter ((<>) Top) fromAtoms
     Rule(q, fromAtoms, toAtom)
 let aerule forallVars existsVars fromAtoms toAtom = baseRule (Quantifiers.add (ExistsQuantifier existsVars) <| Quantifiers.forall forallVars) fromAtoms toAtom
 let rule vars fromAtoms toAtom = baseRule (Quantifiers.forall vars) fromAtoms toAtom
+
+type ruleCloser ( ) =
+    // TODO: remove copypast from synchronization.fs
+    member private x.CollectFreeVarsInTerm = function
+        | TIdent(i, s) -> [i, s]
+        | TConst _ -> []
+        | TApply(_, ts) -> x.CollectFreeVarsInTerms ts
+
+    member private x.CollectFreeVarsInTerms = List.collect x.CollectFreeVarsInTerm
+
+    member private x.CollectFreeVarsInAtom = function
+        | AApply(_, ts) -> x.CollectFreeVarsInTerms ts
+        | Equal (t1, t2) | Distinct (t1, t2) -> x.CollectFreeVarsInTerms [t1; t2]
+        | _ -> []    
+        
+    member x.MakeClosedRule(body, head) : rule =
+        // forall quantifiers around all vars        
+        let freeVars = head::body |> List.collect x.CollectFreeVarsInAtom |> Set.ofList |> Set.toList
+        rule freeVars body head
+        
+    member x.MakeClosedAssertion(body) : rule =
+        let freeVars = body |> List.collect x.CollectFreeVarsInAtom |> Set.ofList |> Set.toList
+        let qs = Quantifiers.forall freeVars
+        Assertion(qs, body)
+
 type definition =
     | DefineFun of function_def
     | DefineFunRec of function_def
