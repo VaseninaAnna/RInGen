@@ -7,7 +7,6 @@ open RInGen.Prelude
 // Sorts
 let tta_sort = gensymp "Tta" |> PrimitiveSort
 let state_sort = gensymp "State" |> PrimitiveSort
-let targetSort = gensymp "targetSort" |> PrimitiveSort
 
 // Function symbol
 let notFunc = Operation.makeElementaryOperationFromSorts (gensymp "notState") [state_sort] state_sort 
@@ -18,7 +17,7 @@ let funcs = List.map Operation.declareOp [notFunc; andFunc; initFunc]
 
 // Predicates
 let isFinalRel = Operation.makeElementaryRelationFromSorts (gensymp "isFinal") [state_sort]
-let transitionEq = equal_op state_sort
+let stateEq = equal_op state_sort
 
 type private TTAaxioms ( ) =
     let rules = Dictionary()
@@ -54,20 +53,24 @@ type private TTAaxioms ( ) =
         let decls = List.map Operation.declareOp ops
         List.map OriginalCommand (decls @ funcs) @ List.map TransformedCommand rules
 
-type private TTA () =
+type private TTA (stateCnt) =
     let predicate_constants = Dictionary<operation,term>()
     let transFuns = Dictionary()
     let orderedVars = Dictionary()
-    let posToTrans = Dictionary()
+    let posToSorts = Dictionary()
     let posQueue = List()
     let generatedRules = List<rule>()
     let ruleCloser = ruleCloser()
+    let stateCnt = stateCnt
 
+    member private x.generateStateVars =
+        List.init stateCnt (fun _ -> TIdent(gensym (), state_sort))
     member private x.newPosition vList =
         let constName = gensymp "position"
         let posTta = Operation.makeConstantFromSort constName tta_sort
         let posTransFunc = x.getTransitionFunc vList
-        posToTrans.Add(posTta, posTransFunc)
+        let sortList = List.map (fun (t:term) -> t.toSort()) vList
+        posToSorts.Add(posTta, sortList)
         posTta, posTransFunc
         
     member private x.getPredicateConstant pred =
@@ -79,19 +82,19 @@ type private TTA () =
             predicate_constants.Add(pred, cnst)
             cnst
             
-    member private x.generateTransitionFunc (tList: term list) =
+    member private x.generateTransitionFunc sortList =
         let relName = gensymp "TransRel"
-        let sortList = List.map (fun (t : term) -> t.toSort()) tList
-        let func = Operation.makeElementaryRelationFromSorts relName ([tta_sort; state_sort] @ sortList)
+        let stateSorts = List.init stateCnt (fun _ -> state_sort)
+        let func = Operation.makeElementaryOperationFromSorts relName ([tta_sort] @ stateSorts @ sortList) state_sort
         func
 
     member private x.getTransitionFunc (tList: term list) =
-        let arity = List.length tList
-        match Dictionary.tryGetValue tList transFuns with
+        let sortList = List.map (fun (t:term) -> t.toSort()) tList
+        match Dictionary.tryGetValue sortList transFuns with
         | Some transRel -> transRel
         | None ->
-            let func = x.generateTransitionFunc tList
-            transFuns.Add(tList, func)
+            let func = x.generateTransitionFunc sortList
+            transFuns.Add(sortList, func)
             func
     member private x.addSortedVar sort vName =
         match Dictionary.tryGetValue sort orderedVars with
@@ -112,6 +115,7 @@ type private TTA () =
     member private x.ParseVariables = function
         | Rule(quantifiers, _, _) ->
             x.ParseQuantifiers quantifiers
+        | Assertion(quantifiers, _) -> () // TODO: do we need to transform these too?
 
     member private x.AddShuffleRule predConst vList =
         let orderedVList = List.sort vList
@@ -119,31 +123,50 @@ type private TTA () =
         
         // generate rule
         let atomTransFunc = x.getTransitionFunc vList 
-        let stateVars = [TIdent(gensym (), state_sort)] // TODO: get state sort list
+        let stateVars = x.generateStateVars
         let posTrans = TApply(posTransFunc, [posTta] @ stateVars @ orderedVList)
         let atomTrans = TApply(atomTransFunc, [predConst] @ stateVars @ vList)
         let posInit = TApply(initFunc, [posTta])
         let atomInit = TApply(initFunc, [predConst])
-        let body = [AApply(transitionEq, [posTrans; atomTrans]); AApply(transitionEq, [posInit; atomInit])]
+        let body = [AApply(stateEq, [posTrans; atomTrans]); AApply(stateEq, [posInit; atomInit])]
         let rule = ruleCloser.MakeClosedAssertion(body)
         generatedRules.Add(rule)
         posTta
     
-    member private x.AddNegRule pos =
-        let posTransFunc =
-            match Dictionary.tryGetValue pos posToTrans with
+    member private x.AddNegRule posTta =
+        let posArgSorts =
+            match Dictionary.tryGetValue posTta posToSorts with
             | Some transFunc -> transFunc
             | None -> __unreachable__()
-        let constName = gensymp "position"
-        let negPosTta = Operation.makeConstantFromSort constName tta_sort
-        posToTrans.Add(negPosTta, posTransFunc)
+        let posTransFunc =
+            match Dictionary.tryGetValue posArgSorts transFuns with
+            | Some transFunc -> transFunc
+            | None -> __unreachable__()
+        let negPosTta = Operation.makeConstantFromSort (gensymp "position") tta_sort
+        posToSorts.Add(negPosTta, posArgSorts)
         
         // rule
-        let stateVars = [TIdent(gensym (), state_sort)]
+        let stateVars = x.generateStateVars
         let notStateVars = List.map (fun x -> TApply(notFunc, [x])) stateVars
-//        let posTrans = TApply(posTransFunc, [pos] @ stateVars @ orderedVList)
-//        let atomTrans = TApply(posTransFunc, [negPosTta] @ notStateVars @ vList)
+        let sortVars = List.map (fun s -> TIdent(gensym (), s)) posArgSorts
+        let posTrans = TApply(notFunc, [TApply(posTransFunc, [posTta] @ stateVars @ sortVars)])
+        let negTrans = TApply(posTransFunc, [negPosTta] @ notStateVars @ sortVars)
+        let posInit = TApply(notFunc, [TApply(initFunc, [posTta])])
+        let negInit = TApply(initFunc, [negPosTta])
+        let body = [AApply(stateEq, [negInit; posInit]); AApply(stateEq, [negTrans; posTrans])]
+        let rule = ruleCloser.MakeClosedAssertion(body)
+        generatedRules.Add(rule)
         negPosTta
+    
+    member private x.addAndRule pos1 pos2 =
+        // TODO: for this function we need position to orderedFreeVars mapping
+        let stateVars1 = x.generateStateVars
+        let stateVars2 = x.generateStateVars
+        let andTta = Operation.makeConstantFromSort (gensymp "position") tta_sort
+        let init1 = TApply(initFunc, [pos1])
+        let init2 = TApply(initFunc, [pos2])
+        let andInit = TApply(initFunc, [andTta])
+        ()
         
     member private x.AddToPositionQueue rule =
         match rule with
@@ -180,12 +203,15 @@ type private TTA () =
         rules
     
 let synchronize commands =
-    let commands, rules = List.choose2 (function OriginalCommand o -> Choice1Of2 o | TransformedCommand t -> Choice2Of2 t) commands
-    let tta = TTA()
+    let commands1, rules = List.choose2 (function OriginalCommand o -> Choice1Of2 o | TransformedCommand t -> Choice2Of2 t) commands
+    let rules, assertions = List.choose2 (function (Rule(_) as r) -> Choice1Of2 r | (Assertion(_) as a) -> Choice2Of2 a) rules
+    let m = 1 // TODO : how do we determine m ? it must be the same for all transition relations
+    let tta = TTA(m)
     // ttaAxioms should generate transition relation axioms for all transitions generated by tta
     let ttaAxioms = TTAaxioms()
     let newTypes = []
     let axioms = ttaAxioms.dumpAxioms ()
-    let rules = tta.traverseRules rules 
-    List.map OriginalCommand newTypes @ axioms
+    let rules = tta.traverseRules rules
+    commands
+//    List.map OriginalCommand newTypes @ axioms
 //    List.map OriginalCommand (adt_decl_commands @ commands) @ new_rules @ List.map TransformedCommand rules

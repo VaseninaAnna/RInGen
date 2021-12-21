@@ -843,7 +843,7 @@ let toClauses (options : transformOptions) commands =
         {commands=syncClauses; diseqs=snd adtEqs}
     else if options.tta_transform then
         let flatClauses = Flattening.flatten clausesWithPreamble
-//        let ttaClauses = TTA.synchronize flatClauses
-        {commands = flatClauses; diseqs=snd adtEqs}
+        let ttaClauses = TTA.synchronize flatClauses
+        {commands = ttaClauses; diseqs=snd adtEqs}
     else
         {commands=simplified; diseqs=snd adtEqs}
