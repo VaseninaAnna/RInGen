@@ -4,7 +4,7 @@ open RInGen.Prelude
 open RInGen.IdentGenerator
 
 type private Flattener () =
-    let axioms = Dictionary()
+    let axioms = List()
     let ruleCloser = ruleCloser()
     let funcToRel = Dictionary()
     
@@ -16,7 +16,7 @@ type private Flattener () =
         let axiom_body = [AApply(operation, inTerms @ [outTerm])]
         let axiomQuantifiers = [ForallQuantifier inVarsSorted ; ExistsQuantifier [outVarSorted]]
         let axiom = Assertion(axiomQuantifiers, axiom_body)
-        axioms.Add(operation, axiom)
+        axioms.Add(axiom)
 
     member x.parseDatatypes adts =
         let res = seq {
@@ -111,11 +111,10 @@ type private Flattener () =
         res
     
     member x.dumpAxioms =
-        let res = seq {
-            for KeyValue(op, rule) in axioms do
-                yield rule
+        seq {
+            for axiom in axioms do
+                axiom
         }
-        res
         
 let flatten commands =
     let commands, rules = List.choose2 (function OriginalCommand o -> Choice1Of2 o | TransformedCommand t -> Choice2Of2 t) commands

@@ -1,6 +1,5 @@
 module RInGen.TTA
 open System.Collections.Generic
-open System.Diagnostics
 open RInGen.Operations
 open RInGen.IdentGenerator
 open RInGen.Prelude
@@ -52,15 +51,16 @@ type private TTAaxioms ( ) =
         let ops, rules = rules |> Dictionary.toList |> List.unzip
         let rules = rules |> List.map List.rev |> List.concat |> List.map ruleCloser.MakeClosedRule
         let decls = List.map Operation.declareOp ops
+        
         List.map OriginalCommand (decls @ funcs) @ List.map TransformedCommand rules
 
 type private TTA (stateCnt) =
     let predicate_constants = Dictionary<operation,term>()
     let transFuns = Dictionary()
-    let orderedVars = Dictionary()
     let posToVars = Dictionary() // TODO: clean unneeded positions from this List
     let posQueue = List()
     let generatedRules = List<rule>()
+    let transAxioms = List()
     let ruleCloser = ruleCloser()
     let stateCnt = stateCnt
 
@@ -92,36 +92,17 @@ type private TTA (stateCnt) =
         let relName = gensymp "TransRel"
         let stateSorts = List.init stateCnt (fun _ -> state_sort)
         let func = Operation.makeElementaryOperationFromSorts relName ([tta_sort] @ stateSorts @ sortList) state_sort
+        // axioms
         func
 
     member private x.getTransitionFunc (tList: term list) =
         let sortList = List.map (fun (t:term) -> t.toSort()) tList
         match Dictionary.tryGetValue sortList transFuns with
-        | Some transRel -> transRel
+        | Some transFun -> transFun
         | None ->
             let func = x.generateTransitionFunc sortList
             transFuns.Add(sortList, func)
-            func
-    member private x.addSortedVar sort vName =
-        match Dictionary.tryGetValue sort orderedVars with
-        | Some vars ->
-            orderedVars.[sort] <- vName::vars
-        | None -> orderedVars.Add(sort, [vName])
-        
-    member private x.ParseQuantifiers qList =
-        for q in qList do
-            match q with
-            |ForallQuantifier(vList) ->
-                for var in vList do
-                    match var with
-                    |(name, sort) ->
-                        x.addSortedVar sort name
-            |ExistsQuantifier(_) -> __unreachable__()
-
-    member private x.ParseVariables = function
-        | Rule(quantifiers, _, _) ->
-            x.ParseQuantifiers quantifiers
-        | Assertion(quantifiers, _) -> () // TODO: do we need to transform these too?
+            func   
 
     member private x.AddShuffleRule predConst vList =
         let orderedVList = List.sort vList
@@ -217,7 +198,7 @@ type private TTA (stateCnt) =
             let tail = List.tail processingQueue
             let pos2 = List.head tail
             let andPos = x.addAndRule pos1 pos2
-            processingQueue <- andPos :: List.tail tail
+            processingQueue <- List.tail tail @ [andPos]
             
         processingQueue
 
@@ -227,13 +208,13 @@ type private TTA (stateCnt) =
                 p
         }
     member x.traverseRules rules =
-        for r in rules do
-            x.ParseVariables r
-
         x.AddToPositionQueue rules
-        
         let positions = x.dumpPosQueue |> Seq.toList
-        let lastPos = List.exactlyOne (x.processPosQueue positions)
+        let preLastPos = List.exactlyOne (x.processPosQueue positions)
+        let lastPos = x.AddNegRule preLastPos
+        // TODO: process quantifiers
+        let lastRule = ruleCloser.MakeClosedAssertion([AApply(isFinalRel, [TApply(initFunc, [lastPos])])])
+        generatedRules.Add(lastRule)
         ()
 
         // process AndQueue
@@ -248,6 +229,27 @@ type private TTA (stateCnt) =
             for r in generatedRules do
                 r
         }
+    member x.dumpDeclarations =
+        let sorts = List.map DeclareSort [state_sort; tta_sort]
+        let posConstants = seq {
+            for KeyValue(pos, vars) in posToVars do
+                match pos with
+                | TConst(name, _) ->
+                    DeclareFun(name, [emptySort], tta_sort)
+                | _ -> () 
+        }
+        let posConstants = posConstants |> Seq.toList
+
+        let transFuncs = seq {
+            for KeyValue(sorts, func) in transFuns do
+                match func with
+                | ElementaryOperation(name, inSorts, outSort)
+                | UserDefinedOperation(name, inSorts, outSort) ->
+                    DeclareFun(name, inSorts, outSort)
+        }
+        
+        let transFuncs = transFuncs |> Seq.toList
+        List.map OriginalCommand (sorts @ posConstants @ transFuncs)
     
 let synchronize commands =
     let commands1, rules = List.choose2 (function OriginalCommand o -> Choice1Of2 o | TransformedCommand t -> Choice2Of2 t) commands
@@ -259,8 +261,9 @@ let synchronize commands =
     let newTypes = []
     let axioms = ttaAxioms.dumpAxioms ()
     tta.traverseRules rules
+    let decls = tta.dumpDeclarations
     let rules = tta.dumpRules |> Seq.toList
-    List.map OriginalCommand (commands1) @ List.map TransformedCommand (rules)
+    List.map OriginalCommand (commands1) @ decls @ axioms @ List.map TransformedCommand (rules)
 //    commands
 //    List.map OriginalCommand newTypes @ axioms
 //    List.map OriginalCommand (adt_decl_commands @ commands) @ new_rules @ List.map TransformedCommand rules

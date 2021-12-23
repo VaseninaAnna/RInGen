@@ -272,6 +272,7 @@ type operation =
         match x with
         | ElementaryOperation(s, _, _)
         | UserDefinedOperation(s, _, _) -> toString s
+
 type smtExpr =
     | Number of int64
     | BoolConst of bool
