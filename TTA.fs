@@ -1,5 +1,6 @@
 module RInGen.TTA
 open System.Collections.Generic
+open System.Diagnostics
 open RInGen.Operations
 open RInGen.IdentGenerator
 open RInGen.Prelude
@@ -57,7 +58,7 @@ type private TTA (stateCnt) =
     let predicate_constants = Dictionary<operation,term>()
     let transFuns = Dictionary()
     let orderedVars = Dictionary()
-    let posToSorts = Dictionary()
+    let posToVars = Dictionary() // TODO: clean unneeded positions from this List
     let posQueue = List()
     let generatedRules = List<rule>()
     let ruleCloser = ruleCloser()
@@ -65,14 +66,19 @@ type private TTA (stateCnt) =
 
     member private x.generateStateVars =
         List.init stateCnt (fun _ -> TIdent(gensym (), state_sort))
+
     member private x.newPosition vList =
         let constName = gensymp "position"
         let posTta = Operation.makeConstantFromSort constName tta_sort
         let posTransFunc = x.getTransitionFunc vList
-        let sortList = List.map (fun (t:term) -> t.toSort()) vList
-        posToSorts.Add(posTta, sortList)
+        posToVars.Add(posTta, vList)
         posTta, posTransFunc
-        
+
+    member private x.getPosVars posTta =
+        match Dictionary.tryGetValue posTta posToVars with
+        | Some vars -> vars
+        | None -> __unreachable__()
+
     member private x.getPredicateConstant pred =
         match Dictionary.tryGetValue pred predicate_constants with
         | Some predConst -> predConst
@@ -134,16 +140,9 @@ type private TTA (stateCnt) =
         posTta
     
     member private x.AddNegRule posTta =
-        let posArgSorts =
-            match Dictionary.tryGetValue posTta posToSorts with
-            | Some transFunc -> transFunc
-            | None -> __unreachable__()
-        let posTransFunc =
-            match Dictionary.tryGetValue posArgSorts transFuns with
-            | Some transFunc -> transFunc
-            | None -> __unreachable__()
-        let negPosTta = Operation.makeConstantFromSort (gensymp "position") tta_sort
-        posToSorts.Add(negPosTta, posArgSorts)
+        let posArgVars = x.getPosVars posTta
+        let posArgSorts = List.map (fun (t: term) -> t.toSort()) posArgVars
+        let negPosTta, posTransFunc = x.newPosition posArgVars
         
         // rule
         let stateVars = x.generateStateVars
@@ -156,51 +155,99 @@ type private TTA (stateCnt) =
         let body = [AApply(stateEq, [negInit; posInit]); AApply(stateEq, [negTrans; posTrans])]
         let rule = ruleCloser.MakeClosedAssertion(body)
         generatedRules.Add(rule)
+        
         negPosTta
     
     member private x.addAndRule pos1 pos2 =
-        // TODO: for this function we need position to orderedFreeVars mapping
         let stateVars1 = x.generateStateVars
         let stateVars2 = x.generateStateVars
-        let andTta = Operation.makeConstantFromSort (gensymp "position") tta_sort
-        let init1 = TApply(initFunc, [pos1])
-        let init2 = TApply(initFunc, [pos2])
-        let andInit = TApply(initFunc, [andTta])
-        ()
-        
-    member private x.AddToPositionQueue rule =
-        match rule with
-        | Rule(_,body,head) ->
-           for a in body do
-               match a with
-               | AApply(op, vList) ->
-                   let pConst = x.getPredicateConstant op
-                   let pos = x.AddShuffleRule pConst vList
-                   posQueue.Add(pos)
-               | Equal(term1, term2) ->
-                   let tSort = term1.toSort()
-                   let op = equal_op tSort
-                   let pConst = x.getPredicateConstant op
-                   let pos = x.AddShuffleRule pConst [term1; term2]
-                   posQueue.Add(pos)
-           match head with
-           | AApply(op, vList) ->
-                let pConst = x.getPredicateConstant op
-                let pos = x.AddShuffleRule pConst vList
-                let neg_pos = x.AddNegRule pos
-                posQueue.Add(neg_pos)
-           | _ -> ()
+        let andStateVars = List.map2 (fun x y -> TApply(andFunc, [x; y])) stateVars1 stateVars2
 
+        let posVars1 = x.getPosVars pos1
+        let posVars2 = x.getPosVars pos2
+        let andPosVars = posVars1 @ posVars2 |> Set.ofList |> Set.toList |> List.sort
+        
+        let andTta, andTransFunc = x.newPosition andPosVars
+        let andTrans = TApply(andTransFunc, [andTta] @ andStateVars @ andPosVars)
+        
+        let transFunc1 = x.getTransitionFunc posVars1
+        let posTrans1 = TApply(transFunc1, [pos1] @ stateVars1 @ posVars1)
+        let transFunc2 = x.getTransitionFunc posVars2
+        let posTrans2 = TApply(transFunc2, [pos2] @ stateVars2 @ posVars2)
+        let posTrans = TApply(andFunc, [posTrans1; posTrans2])
+        
+        let posInit1 = TApply(initFunc, [pos1])
+        let posInit2 = TApply(initFunc, [pos2])
+        let posInit = TApply(andFunc, [posInit1; posInit2])
+        let andInit = TApply(initFunc, [andTta])
+        
+        let body = [AApply(stateEq, [andTrans; posTrans]) ; AApply(stateEq, [andInit; posInit])] 
+        let rule = ruleCloser.MakeClosedAssertion(body)
+        generatedRules.Add(rule)
+        andTta
+        
+    member private x.AddToPositionQueue rules =
+        for rule in rules do
+            match rule with
+            | Rule(_,body,head) ->
+               for a in body do
+                   match a with
+                   | AApply(op, vList) ->
+                       let pConst = x.getPredicateConstant op
+                       let pos = x.AddShuffleRule pConst vList
+                       posQueue.Add(pos)
+                   | Equal(term1, term2) ->
+                       let tSort = term1.toSort()
+                       let op = equal_op tSort
+                       let pConst = x.getPredicateConstant op
+                       let pos = x.AddShuffleRule pConst [term1; term2]
+                       posQueue.Add(pos)
+               match head with
+               | AApply(op, vList) ->
+                    let pConst = x.getPredicateConstant op
+                    let pos = x.AddShuffleRule pConst vList
+                    let neg_pos = x.AddNegRule pos
+                    posQueue.Add(neg_pos)
+               | _ -> ()
     
+    member private x.processPosQueue queue =
+        let mutable processingQueue = queue
+        while not (List.length processingQueue = 1) do
+            let pos1 = List.head processingQueue
+            let tail = List.tail processingQueue
+            let pos2 = List.head tail
+            let andPos = x.addAndRule pos1 pos2
+            processingQueue <- andPos :: List.tail tail
+            
+        processingQueue
+
+    member private x.dumpPosQueue =
+        seq {
+            for p in posQueue do
+                p
+        }
     member x.traverseRules rules =
         for r in rules do
             x.ParseVariables r
-            x.AddToPositionQueue r
+
+        x.AddToPositionQueue rules
+        
+        let positions = x.dumpPosQueue |> Seq.toList
+        let lastPos = List.exactlyOne (x.processPosQueue positions)
+        ()
+
         // process AndQueue
         // process quantifiers
+        // dump transition axioms
         // dump new rules
+        
         // dump sorts
-        rules
+    
+    member x.dumpRules =
+        seq {
+            for r in generatedRules do
+                r
+        }
     
 let synchronize commands =
     let commands1, rules = List.choose2 (function OriginalCommand o -> Choice1Of2 o | TransformedCommand t -> Choice2Of2 t) commands
@@ -211,7 +258,9 @@ let synchronize commands =
     let ttaAxioms = TTAaxioms()
     let newTypes = []
     let axioms = ttaAxioms.dumpAxioms ()
-    let rules = tta.traverseRules rules
-    commands
+    tta.traverseRules rules
+    let rules = tta.dumpRules |> Seq.toList
+    List.map OriginalCommand (commands1) @ List.map TransformedCommand (rules)
+//    commands
 //    List.map OriginalCommand newTypes @ axioms
 //    List.map OriginalCommand (adt_decl_commands @ commands) @ new_rules @ List.map TransformedCommand rules
