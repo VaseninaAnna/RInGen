@@ -4,6 +4,7 @@ open System.Collections.Generic
 open System.IO
 open System.Threading
 open System.Threading.Tasks
+open RInGen.Prelude
 
 let __notImplemented__() = failwith "Not implemented!"
 let __unreachable__() = failwith "Unreachable!"
@@ -201,6 +202,14 @@ type ident = symbol
 type sort =
     | PrimitiveSort of ident
     | CompoundSort of ident * sort list
+
+    member x.getBotSymbol() =
+        // TODO: this is dangerous, it is possible to get a non-ident value
+        match x with
+        | PrimitiveSort name
+        | CompoundSort(name, _) ->
+            sprintf "%s_bot" name
+
     override x.ToString() =
         match x with
         | PrimitiveSort i -> i.ToString()
@@ -615,6 +624,7 @@ module Quantifiers =
 type rule =
     | Rule of quantifiers * atom list * atom
     | Assertion of quantifiers * atom list
+    | FOLRule of folCommand
     override x.ToString() =
         match x with
         | Rule(qs, xs, x) ->

@@ -7,52 +7,82 @@ open RInGen.Prelude
 // Sorts
 let tta_sort = gensymp "Tta" |> PrimitiveSort
 let state_sort = gensymp "State" |> PrimitiveSort
+let emptyState = Operation.makeConstantFromSort (gensymp "EmptyState") state_sort
 
 // Function symbol
 let notFunc = Operation.makeElementaryOperationFromSorts (gensymp "notState") [state_sort] state_sort 
 let andFunc = Operation.makeElementaryOperationFromSorts (gensymp "andStates") [state_sort; state_sort] state_sort 
-let initFunc = Operation.makeElementaryOperationFromSorts (gensymp "initState") [tta_sort] state_sort 
-
-let funcs = List.map Operation.declareOp [notFunc; andFunc; initFunc]
+let initFunc = Operation.makeElementaryOperationFromSorts (gensymp "initState") [tta_sort] state_sort
 
 // Predicates
 let isFinalRel = Operation.makeElementaryRelationFromSorts (gensymp "isFinal") [state_sort]
+let isReachableRel = Operation.makeElementaryRelationFromSorts (gensymp "isReach") [state_sort; state_sort; tta_sort]
+let addStateRel = Operation.makeElementaryRelationFromSorts (gensymp "addState") [state_sort; state_sort; state_sort]
+let ttaStatesRel = Operation.makeElementaryRelationFromSorts (gensymp "ttaStates") [state_sort; tta_sort]
+let stateInStates = Operation.makeElementaryRelationFromSorts (gensymp "StateIn") [state_sort; state_sort]
 let stateEq = equal_op state_sort
 
 type private TTAaxioms ( ) =
-    let rules = Dictionary()
+    let axioms = List()
     let ruleCloser = ruleCloser()
-    
-    member private x.AddCombRule pred rule =
-        match Dictionary.tryGetValue pred rules with
-        | Some predRules ->
-            rules.[pred] <- rule::predRules
-        | None -> rules.Add(pred, [rule])
-    
+
     member private x.generateV1 =
-        let state_var = TIdent(gensym (), state_sort)
-        let not_state_var = TApply(notFunc, [state_var])
-        let head = AApply(isFinalRel, [state_var])
-        let body = AApply(isFinalRel, [not_state_var])
-        x.AddCombRule isFinalRel ([body], head)
-        x.AddCombRule isFinalRel ([head], body)
-        
+        let stateVar = TIdent(gensym (), state_sort)
+        let notStateVar = TApply(notFunc, [stateVar])
+        let l = AApply(isFinalRel, [notStateVar]) |> FOLAtom
+        let r = AApply(isFinalRel, [stateVar]) |> FOLAtom
+        let conj1 = FOLAnd([l; FOLNot(r)])
+        let conj2 = FOLAnd([FOLNot(l); r])
+        let axiomBody = FOLOr([conj1; conj2])
+        let forallVars = [stateVar] |> List.map (function TIdent(n, s) -> (n, s) )
+        let forallQuant = ForallQuantifier(forallVars)
+        let axiom = FOLAssertion([forallQuant], axiomBody)
+        axioms.Add(axiom)
+
     member private x.generateV2 =
-        let state_var1 = TIdent(gensym (), state_sort)
-        let state_var2 = TIdent(gensym (), state_sort)
-        let andExpr = TApply(andFunc, [state_var1; state_var2])
-        let body = [AApply(isFinalRel, [state_var1]); AApply(isFinalRel, [state_var2])]
-        let head = AApply(isFinalRel, [andExpr])
-        x.AddCombRule isFinalRel (body, head)
-        
+        let stateVar1 = TIdent(gensym (), state_sort)
+        let stateVar2 = TIdent(gensym (), state_sort)
+        let andExpr = TApply(andFunc, [stateVar1; stateVar2])
+        let l = AApply(isFinalRel, [andExpr]) |> FOLAtom
+        let r = [AApply(isFinalRel, [stateVar1]); AApply(isFinalRel, [stateVar2])] |> List.map FOLAtom
+
+        let conj1 = FOLAnd([l] @ r)
+        let conj2 = FOLAnd([FOLNot(l); FOLNot(FOLAnd(r))])
+        let axiomBody = FOLOr([conj1; conj2])
+
+        let forallVars = [stateVar1; stateVar2] |> List.map (function TIdent(n, s) -> (n, s) )
+        let forallQuant = ForallQuantifier(forallVars)
+        let axiom = FOLAssertion([forallQuant], axiomBody)
+        axioms.Add(axiom)
+
+    member private x.generateV3 =
+        let ttaVar = TIdent(gensym (), tta_sort)
+        let stateVar1 = TIdent(gensym (), state_sort)
+        let stateVar2 = TIdent(gensym (), state_sort)
+
+        let isState = AApply(ttaStatesRel, [stateVar1; ttaVar])
+        let sIsFinal = AApply(isFinalRel, [stateVar1])
+        let sIsFinal2 = AApply(isFinalRel, [stateVar2])
+        let sInS = AApply(stateInStates, [stateVar2; stateVar1])
+        // TODO: todo
+        ()
+
+    member private x.generateA_empty =
+        ()
+
+    member private x.generateAdd =
+        ()
+
     member x.dumpAxioms () =
         x.generateV1
         x.generateV2
-        let ops, rules = rules |> Dictionary.toList |> List.unzip
-        let rules = rules |> List.map List.rev |> List.concat |> List.map ruleCloser.MakeClosedRule
-        let decls = List.map Operation.declareOp ops
-        
-        List.map OriginalCommand (decls @ funcs) @ List.map TransformedCommand rules
+        x.generateV3
+        x.generateA_empty
+        x.generateAdd
+        let funcs = List.map Operation.declareOp [notFunc; andFunc; initFunc]
+        let preds = List.map Operation.declareOp [isFinalRel; isReachableRel; addStateRel; ttaStatesRel; stateInStates]
+//        List.map OriginalCommand (funcs @ preds) @ List.map TransformedCommand rules
+        List.map OriginalCommand (funcs @ preds)
 
 type private TTA (stateCnt) =
     let predicate_constants = Dictionary<operation,term>()
@@ -87,12 +117,19 @@ type private TTA (stateCnt) =
             let cnst = Operation.makeConstantFromSort constName tta_sort 
             predicate_constants.Add(pred, cnst)
             cnst
-            
+
     member private x.generateTransitionFunc sortList =
         let relName = gensymp "TransRel"
         let stateSorts = List.init stateCnt (fun _ -> state_sort)
         let func = Operation.makeElementaryOperationFromSorts relName ([tta_sort] @ stateSorts @ sortList) state_sort
-        // axioms
+        // Add init axiom
+        let ttaVarX = TIdent(gensym(), tta_sort)
+        let initStates = List.init stateCnt (fun _ -> TApply(initFunc, [ttaVarX]))
+        let bots = List.map (fun (s: sort) -> TConst(s.getBotSymbol(), s)) sortList
+        let transitionFromBots = TApply(func, [ttaVarX] @ initStates @ bots)
+        let initOfStateX = TApply(initFunc, [ttaVarX])
+        let initAxiom = ruleCloser.MakeClosedAssertion([AApply(stateEq, [transitionFromBots; initOfStateX])])
+        transAxioms.Add(initAxiom)
         func
 
     member private x.getTransitionFunc (tList: term list) =
@@ -102,12 +139,12 @@ type private TTA (stateCnt) =
         | None ->
             let func = x.generateTransitionFunc sortList
             transFuns.Add(sortList, func)
-            func   
+            func
 
     member private x.AddShuffleRule predConst vList =
         let orderedVList = List.sort vList
         let posTta, posTransFunc =  x.newPosition orderedVList
-        
+
         // generate rule
         let atomTransFunc = x.getTransitionFunc vList 
         let stateVars = x.generateStateVars
@@ -119,7 +156,7 @@ type private TTA (stateCnt) =
         let rule = ruleCloser.MakeClosedAssertion(body)
         generatedRules.Add(rule)
         posTta
-    
+
     member private x.AddNegRule posTta =
         let posArgVars = x.getPosVars posTta
         let posArgSorts = List.map (fun (t: term) -> t.toSort()) posArgVars
@@ -181,6 +218,7 @@ type private TTA (stateCnt) =
                        let tSort = term1.toSort()
                        let op = equal_op tSort
                        let pConst = x.getPredicateConstant op
+                       // TODO: generate equality axiom (E)
                        let pos = x.AddShuffleRule pConst [term1; term2]
                        posQueue.Add(pos)
                match head with
@@ -207,6 +245,127 @@ type private TTA (stateCnt) =
             for p in posQueue do
                 p
         }
+
+    member private x.addRAxiom oldPos =
+        let stateVar = TIdent(gensym(), state_sort)
+        let stateVar' = TIdent(gensym(), state_sort)
+        let isR = AApply(isReachableRel, [stateVar; stateVar'; oldPos])
+
+        let sInState = AApply(stateInStates, [stateVar; stateVar'])
+        let oldInit = TApply(initFunc, [oldPos])
+        let sInInit = AApply(stateEq, [stateVar; oldInit])
+
+        let oldPosVars = x.getPosVars oldPos
+        let newVars, oldVar = List.splitAt (List.length oldPosVars - 1) oldPosVars
+
+        let oldTransFunc = x.getTransitionFunc oldPosVars
+        let oldStateVars = x.generateStateVars
+        let bots = List.map (function TIdent(_, s) -> TConst(s.getBotSymbol(), s)) newVars
+
+        let oldTrans = TApply(oldTransFunc, [oldPos] @ oldStateVars @ bots @ oldVar)
+        let sIsOldTrans = AApply(stateEq, [stateVar; oldTrans])
+
+        let stateVar'' = TIdent(gensym(), state_sort)
+        let isReachList = List.map (fun x -> AApply(isReachableRel, [x; stateVar''; oldPos])) oldStateVars
+
+        let addPred = AApply(addStateRel, [stateVar''; stateVar'; stateVar])
+
+        // isR <=> (sInState /\ sInInit) \/ (sInState /\ sIsOldTrans /\ isReachList /\ addPred))
+        let conj1 = [sInState; sInInit] |> List.map (fun (x: atom) -> FOLAtom(x)) |> FOLAnd
+        let conj2 = [sInState; sIsOldTrans; addPred] @ isReachList |> List.map (fun (x: atom) -> FOLAtom(x)) |> FOLAnd
+        let r = FOLOr([conj1; conj2])
+        let l = FOLAtom(isR)
+        let axiomBody = FOLOr([FOLAnd([l; r]); FOLAnd([FOLNot(l); FOLNot(r)])])
+
+        let forallVars = [stateVar; stateVar'] |> List.map (function TIdent(n, s) -> (n, s) )
+        let existsVars = [stateVar''] @ oldStateVars @ oldVar |> List.map (function TIdent(n, s) -> (n, s) )
+        let forallQuant = ForallQuantifier(forallVars)
+        let existsQuant = ExistsQuantifier(existsVars)
+        let rAxiom = FOLAssertion([forallQuant; existsQuant], axiomBody)
+        // TODO: dump axiom
+        ()
+
+    member private x.addSAxiom newPos oldPos =
+        let oldStateSet = AApply(ttaStatesRel, [emptyState; oldPos])
+        let stateVars = x.generateStateVars
+        let newPosVars = x.getPosVars newPos
+        let newTransRel = x.getTransitionFunc newPosVars
+
+        let newTrans = TApply(newTransRel, [newPos] @ stateVars @ newPosVars)
+        let newStateSet = AApply(ttaStatesRel, [newTrans; oldPos])
+        let rule = ruleCloser.MakeClosedAssertion([oldStateSet; newStateSet])
+        transAxioms.Add(rule)
+
+
+    member private x.addAddAxiom oldPos =
+        let sVar = TIdent(gensym(), state_sort)
+        let sVar' = TIdent(gensym (), state_sort)
+        let sVar'' = TIdent(gensym (), state_sort)
+
+        let ttaStates1 = AApply(ttaStatesRel, [sVar; oldPos])
+
+        let oldStateVars = x.generateStateVars
+        let oldPosVars = x.getPosVars oldPos
+        let oldTransFunc = x.getTransitionFunc oldPosVars
+        let oldTrans = TApply(oldTransFunc, [oldPos] @ oldStateVars @ oldPosVars)
+
+        let sEqTrans = AApply(stateEq, [sVar'; oldTrans])
+
+        let ttaStates2 = AApply(ttaStatesRel, [sVar''; oldPos])
+        let addPred = AApply(addStateRel, [sVar''; sVar; sVar'])
+
+        let forallVars = [sVar; sVar'] |> List.map (function TIdent(n, s) -> (n, s) )
+        let existsVars = oldStateVars @ oldPosVars @ [sVar''] |> List.map (function TIdent(n, s) -> (n, s) )
+        let forallQuant = ForallQuantifier(forallVars)
+        let existsQuant = ExistsQuantifier(existsVars)
+
+        // ttaStates1 /\ sEqTrans => ttaStates2 /\ addPred
+        let conj1 = [ttaStates1; sEqTrans] |> List.map (fun (x: atom) -> FOLAtom(x)) |> FOLAnd
+        let conj2 = [ttaStates2; addPred] |> List.map (fun (x: atom) -> FOLAtom(x)) |> FOLAnd
+        let axiomBody = FOLOr([FOLNot(conj1); conj2])
+        let axiom = FOLAssertion([forallQuant; existsQuant], axiomBody)
+        // TODO: dump axiom
+        ()
+
+    member private x.addExistentialAxioms newPos oldPos =
+        x.addRAxiom oldPos
+        x.addSAxiom newPos oldPos
+        x.addAddAxiom oldPos
+
+    member private x.processExistentialQuantor oldPos oldPosVars =
+        let oldTransFun = x.getTransitionFunc oldPosVars
+        let newPosVars, oldTransVar = List.splitAt (List.length oldPosVars - 1) oldPosVars
+        let newPos, newTransFun = x.newPosition newPosVars
+
+        // gamma1
+        let stateVar = TIdent(gensym (), state_sort)
+        let init = TApply(initFunc, [newPos])
+        let sInInit = AApply(stateInStates, [stateVar; init])
+        let isReach = AApply(isReachableRel, [stateVar; emptyState; oldPos])
+        let rule = ruleCloser.MakeClosedRule([sInInit], isReach)
+        generatedRules.Add(rule)
+        let rule = ruleCloser.MakeClosedRule([isReach], sInInit)
+        generatedRules.Add(rule)
+
+        // gamma2
+        let sVar = TIdent(gensym (), state_sort)
+        let stateVars = List.init stateCnt (fun _ -> TIdent(gensym (), state_sort))
+        let newStateVars = List.init stateCnt (fun _ -> TIdent(gensym (), state_sort))
+        let newTrans = TApply(newTransFun, [newPos] @ stateVars @ newPosVars)
+        let sInTrans = AApply(stateInStates, [sVar; newTrans])
+
+        let newStateInOldState = List.map2 (fun x y -> AApply(stateInStates, [x; y])) newStateVars stateVars
+        let oldTrans =  TApply(oldTransFun, [oldPos] @ newStateVars @ oldPosVars)
+        let body = newStateInOldState @ [AApply(stateEq, [sVar; oldTrans])]
+
+        let existsVars = newStateVars @ oldTransVar |> List.map (function TIdent(name, sort) -> (name, sort))
+        let forallVars = [sVar] @ stateVars @ newPosVars  |> List.map (function TIdent(name, sort) -> (name, sort))
+        let rule = aerule forallVars existsVars body sInTrans // <=
+        generatedRules.Add(rule)
+        // TODO: =>
+        ()
+
+
     member x.traverseRules rules =
         x.AddToPositionQueue rules
         let positions = x.dumpPosQueue |> Seq.toList
@@ -217,13 +376,6 @@ type private TTA (stateCnt) =
         generatedRules.Add(lastRule)
         ()
 
-        // process AndQueue
-        // process quantifiers
-        // dump transition axioms
-        // dump new rules
-        
-        // dump sorts
-    
     member x.dumpRules =
         seq {
             for r in generatedRules do
@@ -231,6 +383,14 @@ type private TTA (stateCnt) =
         }
     member x.dumpDeclarations =
         let sorts = List.map DeclareSort [state_sort; tta_sort]
+        let predDeclarations = seq {
+            for KeyValue(_, term) in predicate_constants do
+                match term with
+                | TConst(name, sort) ->
+                    DeclareFun(name, [emptySort], sort)
+        }
+        let predDeclarations = predDeclarations |> Seq.toList
+
         let posConstants = seq {
             for KeyValue(pos, vars) in posToVars do
                 match pos with
@@ -249,21 +409,34 @@ type private TTA (stateCnt) =
         }
         
         let transFuncs = transFuncs |> Seq.toList
-        List.map OriginalCommand (sorts @ posConstants @ transFuncs)
-    
+        List.map OriginalCommand (sorts @ predDeclarations @ posConstants @ transFuncs)
+
+    member x.dumpTransAxioms =
+        seq {
+            for axiom in transAxioms do
+                axiom
+        }
+
+let defineBots commands =
+    seq {
+        for command in commands do
+            match command with
+            | DeclareSort s ->
+                DeclareConst(s.getBotSymbol(), s)
+            | _ -> ()
+    }
+
 let synchronize commands =
     let commands1, rules = List.choose2 (function OriginalCommand o -> Choice1Of2 o | TransformedCommand t -> Choice2Of2 t) commands
+    let botConstants = defineBots commands1 |> Seq.toList
     let rules, assertions = List.choose2 (function (Rule(_) as r) -> Choice1Of2 r | (Assertion(_) as a) -> Choice2Of2 a) rules
     let m = 1 // TODO : how do we determine m ? it must be the same for all transition relations
     let tta = TTA(m)
     // ttaAxioms should generate transition relation axioms for all transitions generated by tta
     let ttaAxioms = TTAaxioms()
-    let newTypes = []
-    let axioms = ttaAxioms.dumpAxioms ()
+    let baseAxioms = ttaAxioms.dumpAxioms ()
     tta.traverseRules rules
+    let transAxioms = tta.dumpTransAxioms |> Seq.toList
     let decls = tta.dumpDeclarations
     let rules = tta.dumpRules |> Seq.toList
-    List.map OriginalCommand (commands1) @ decls @ axioms @ List.map TransformedCommand (rules)
-//    commands
-//    List.map OriginalCommand newTypes @ axioms
-//    List.map OriginalCommand (adt_decl_commands @ commands) @ new_rules @ List.map TransformedCommand rules
+    List.map OriginalCommand (commands1 @ botConstants) @ decls @ baseAxioms @ List.map TransformedCommand (transAxioms @ rules)

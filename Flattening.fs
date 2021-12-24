@@ -100,7 +100,6 @@ type private Flattener () =
             let newAtoms = Seq.toList newAtoms
             ruleCloser.MakeClosedRule(newAtoms @ renamedBody, renamedHead)
         | _ -> rule
-        
 
     member x.parseClauses rules =
         let res = seq {
@@ -109,13 +108,13 @@ type private Flattener () =
                 yield new_rule
         }
         res
-    
+
     member x.dumpAxioms =
         seq {
             for axiom in axioms do
                 axiom
         }
-        
+
 let flatten commands =
     let commands, rules = List.choose2 (function OriginalCommand o -> Choice1Of2 o | TransformedCommand t -> Choice2Of2 t) commands
     let fun_decls, commands = commands |> List.choose2 (function DeclareFun(name, inSorts, outSort) -> Choice1Of2 (name, inSorts, outSort) | c -> Choice2Of2 c)
