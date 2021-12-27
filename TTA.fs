@@ -78,7 +78,7 @@ type private TTAaxioms ( ) =
 
     member private x.generateA_empty =
         let sVar = TIdent(gensym(), state_sort)
-        let axiomBody = AApply(stateInStates, [sVar; emptyState]) |> FOLAtom
+        let axiomBody = AApply(stateInStates, [sVar; emptyState]) |> FOLAtom |> FOLNot
         let forallVars = [sVar] |> List.map (function TIdent(n, s) -> (n, s) )
         let forallQuant = ForallQuantifier(forallVars)
         let axiom = FOLAssertion([forallQuant], axiomBody)
@@ -123,7 +123,7 @@ type private TTA (stateCnt) =
     let posToVars = Dictionary() // TODO: clean unneeded positions from this List
     let posQueue = List()
     let generatedRules = List<rule>()
-    let transAxioms = List()
+    let processedAssertions = List()
     let ruleCloser = ruleCloser()
     let stateCnt = stateCnt
     let folPart = List()
@@ -163,7 +163,7 @@ type private TTA (stateCnt) =
         let transitionFromBots = TApply(func, [ttaVarX] @ initStates @ bots)
         let initOfStateX = TApply(initFunc, [ttaVarX])
         let initAxiom = ruleCloser.MakeClosedAssertion([AApply(stateEq, [transitionFromBots; initOfStateX])])
-        transAxioms.Add(initAxiom)
+        generatedRules.Add(initAxiom)
         func
 
     member private x.getTransitionFunc (tList: term list) =
@@ -257,31 +257,21 @@ type private TTA (stateCnt) =
         let axiom = FOLAssertion([forallQuant], axiomBody)
         folPart.Add(axiom)
 
-    member private x.AddToPositionQueue rules =
-        for rule in rules do
-            match rule with
-            | Rule(_,body,head) ->
-               for a in body do
-                   match a with
-                   | AApply(op, vList) ->
-                       let pConst = x.getPredicateConstant op
-                       let pos = x.AddShuffleRule pConst vList
-                       posQueue.Add(pos)
-                   | Equal(term1, term2) ->
-                       let tSort = term1.toSort()
-                       let op = equal_op tSort
-                       let pConst = x.getPredicateConstant op
-                       x.addEqualityAxiom pConst tSort
-                       let pos = x.AddShuffleRule pConst [term1; term2]
-                       posQueue.Add(pos)
-               match head with
-               | AApply(op, vList) ->
-                    let pConst = x.getPredicateConstant op
-                    let pos = x.AddShuffleRule pConst vList
-                    let neg_pos = x.AddNegRule pos
-                    posQueue.Add(neg_pos)
-               | _ -> ()
-    
+    member private x.processBody body =
+       for a in body do
+           match a with
+           | AApply(op, vList) ->
+               let pConst = x.getPredicateConstant op
+               let pos = x.AddShuffleRule pConst vList
+               posQueue.Add(pos)
+           | Equal(term1, term2) ->
+               let tSort = term1.toSort()
+               let op = equal_op tSort
+               let pConst = x.getPredicateConstant op
+               x.addEqualityAxiom pConst tSort
+               let pos = x.AddShuffleRule pConst [term1; term2]
+               posQueue.Add(pos)
+
     member private x.processPosQueue queue =
         let mutable processingQueue = queue
         while not (List.length processingQueue = 1) do
@@ -346,8 +336,7 @@ type private TTA (stateCnt) =
         let newTrans = TApply(newTransRel, [newPos] @ stateVars @ newPosVars)
         let newStateSet = AApply(ttaStatesRel, [newTrans; oldPos])
         let rule = ruleCloser.MakeClosedAssertion([oldStateSet; newStateSet])
-        transAxioms.Add(rule)
-
+        generatedRules.Add(rule)
 
     member private x.addAddAxiom oldPos =
         let sVar = TIdent(gensym(), state_sort)
@@ -438,19 +427,56 @@ type private TTA (stateCnt) =
         curPos
 
     member x.traverseRules rules =
-        x.AddToPositionQueue rules
+        for rule in rules do
+            posQueue.Clear()
+            match rule with
+            | Rule(_,body,head) ->
+                x.processBody body
+                match head with
+                | AApply(op, vList) ->
+                     let pConst = x.getPredicateConstant op
+                     let pos = x.AddShuffleRule pConst vList
+                     let neg_pos = x.AddNegRule pos
+                     posQueue.Add(neg_pos)
+                | _ -> ()
+                let positions = x.dumpPosQueue |> Seq.toList
+                let phiPos = List.exactlyOne (x.processPosQueue positions)
+                let preLastPos = x.processQuantifiers phiPos
+                let lastPos = x.AddNegRule preLastPos
+                processedAssertions.Add(lastPos)
+
+        // process assertions
+        posQueue.Clear()
+        for a in processedAssertions do
+            posQueue.Add(a)
+
         let positions = x.dumpPosQueue |> Seq.toList
-        let phiPos = List.exactlyOne (x.processPosQueue positions)
-        let preLastPos = x.processQuantifiers phiPos
-        let lastPos = x.AddNegRule preLastPos
-        let lastRule = ruleCloser.MakeClosedAssertion([AApply(isFinalRel, [TApply(initFunc, [lastPos])])])
+        let finalPos = List.exactlyOne (x.processPosQueue positions)
+
+        let lastRule = ruleCloser.MakeClosedAssertion([AApply(isFinalRel, [TApply(initFunc, [finalPos])])])
         generatedRules.Add(lastRule)
+
+    member x.traverseAssertions assertions =
+        for a in assertions do
+            posQueue.Clear()
+            match a with
+            | Assertion(_, body) ->
+                x.processBody body
+                let positions = x.dumpPosQueue |> Seq.toList
+                let phiPos = List.exactlyOne (x.processPosQueue positions)
+                let nextPos = x.processExistentialQuantor phiPos
+                let negPos = x.AddNegRule nextPos
+                let preLastPos = x.processQuantifiers negPos
+                let lastPos = x.AddNegRule preLastPos
+                processedAssertions.Add(lastPos)
+
 
     member x.dumpRules =
         seq {
             for r in generatedRules do
                 r
         }
+
     member x.dumpDeclarations =
         let funcs = List.map Operation.declareOp [notFunc; andFunc; initFunc]
         let preds = List.map Operation.declareOp [isFinalRel; isReachableRel; addStateRel; ttaStatesRel; stateInStates]
@@ -488,9 +514,9 @@ type private TTA (stateCnt) =
         let transFuncs = transFuncs |> Seq.toList
         List.map OriginalCommand (sorts @ funcs @ preds @ [emptyStateDecl] @ predConsts @ posConstants @ transFuncs)
 
-    member x.dumpTransAxioms =
+    member x.dumpFolAxioms =
         seq {
-            for axiom in transAxioms do
+            for axiom in folPart do
                 axiom
         }
 
@@ -507,16 +533,15 @@ let synchronize commands =
     let commands1, rules = List.choose2 (function OriginalCommand o -> Choice1Of2 o | TransformedCommand t -> Choice2Of2 t) commands
     let botConstants = defineBots commands1 |> Seq.toList
     let rules, assertions = List.choose2 (function (Rule(_) as r) -> Choice1Of2 r | (Assertion(_) as a) -> Choice2Of2 a) rules
-    let m = 1 // TODO : how do we determine m ? it must be the same for all transition relations
-    let tta = TTA(m) // TODO : process assertions
-    // ttaAxioms should generate transition relation axioms for all transitions generated by tta
     let ttaAxioms = TTAaxioms()
     let baseAxioms = ttaAxioms.generateAxioms ()
 
+    let m = 1 // TODO : how do we determine m ? it must be the same for all transition relations
+    let tta = TTA(m)
+    tta.traverseAssertions assertions
     tta.traverseRules rules
-    let transAxioms = tta.dumpTransAxioms |> Seq.toList
+    let transAxioms = tta.dumpFolAxioms |> Seq.toList
     let decls = tta.dumpDeclarations
     let rules = tta.dumpRules |> Seq.toList
-    let clauses = List.map OriginalCommand (commands1 @ botConstants) @ decls @ List.map TransformedCommand (transAxioms @ rules)
-
-    clauses, baseAxioms
+    let clauses = List.map OriginalCommand (commands1 @ botConstants) @ decls @ List.map TransformedCommand (rules)
+    clauses, baseAxioms @ transAxioms

@@ -30,7 +30,9 @@ type private Flattener () =
                         let newOperation = ElementaryOperation(opName, predSorts, boolSort)
                         funcToRel.Add(opName, newOperation)
                         x.addAxiom newOperation inSorts outSort
-                        yield DeclareFun(opName, predSorts, boolSort)
+                        // We keep original declarations since flattening is not used without tta generation
+                        // TODO: make flattening a separate feature
+                        yield DeclareFun(opName, inSorts, outSort)
         }
         res
                 
