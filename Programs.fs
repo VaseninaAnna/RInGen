@@ -123,4 +123,4 @@ type ProgramRunner () =
 
 type transformOptions = {tip: bool; sync_terms: bool; tta_transform: bool; child_transformer: ProgramRunner option}
 type solvingOptions = {keep_exists: bool; table: bool}
-type transformContext = {commands: transformedCommand list; diseqs: Map<sort, operation>}
+type transformContext = {commands: transformedCommand list; diseqs: Map<sort, operation>; folPart: folCommand list}

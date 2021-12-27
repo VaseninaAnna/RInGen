@@ -4,7 +4,6 @@ open System.Collections.Generic
 open System.IO
 open System.Threading
 open System.Threading.Tasks
-open RInGen.Prelude
 
 let __notImplemented__() = failwith "Not implemented!"
 let __unreachable__() = failwith "Unreachable!"
@@ -624,7 +623,6 @@ module Quantifiers =
 type rule =
     | Rule of quantifiers * atom list * atom
     | Assertion of quantifiers * atom list
-    | FOLRule of folCommand
     override x.ToString() =
         match x with
         | Rule(qs, xs, x) ->

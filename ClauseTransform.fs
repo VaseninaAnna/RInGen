@@ -840,10 +840,10 @@ let toClauses (options : transformOptions) commands =
     let simplified = Simplify.simplify clausesWithPreamble
     if options.sync_terms then
         let syncClauses = Synchronization.synchronize clausesWithPreamble
-        {commands=syncClauses; diseqs=snd adtEqs}
+        {commands=syncClauses; diseqs=snd adtEqs; folPart=[]}
     else if options.tta_transform then
         let flatClauses = Flattening.flatten clausesWithPreamble
-        let ttaClauses = TTA.synchronize flatClauses
-        {commands = ttaClauses; diseqs=snd adtEqs}
+        let ttaClauses, fols = TTA.synchronize flatClauses
+        {commands = ttaClauses; diseqs=snd adtEqs; folPart=fols}
     else
-        {commands=simplified; diseqs=snd adtEqs}
+        {commands=simplified; diseqs=snd adtEqs; folPart=[]}
