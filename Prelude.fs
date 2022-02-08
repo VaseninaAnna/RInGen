@@ -196,13 +196,46 @@ module Symbols =
 
     let addPrefix (pref : string) s = pref + s
 type ident = symbol
+
+[<CustomEquality; CustomComparison>]
 type sort =
     | PrimitiveSort of ident
     | CompoundSort of ident * sort list
+
+    member x.getBotSymbol() =
+        // TODO: this is dangerous, it is possible to get a non-ident value
+        match x with
+        | PrimitiveSort name
+        | CompoundSort(name, _) ->
+            sprintf "%s_bot" name
+
     override x.ToString() =
         match x with
         | PrimitiveSort i -> i.ToString()
         | CompoundSort(name, sorts) -> sorts |> List.map toString |> join " " |> sprintf "(%s %s)" name
+    
+    override x.Equals(b) =
+        match b with
+        | :? sort as s ->
+            match x,s with
+            |PrimitiveSort(xName), PrimitiveSort(sName)
+            |CompoundSort(xName, _), CompoundSort(sName, _) ->    
+                xName.Equals(sName)
+            | _ -> false
+        | _ -> false
+
+    interface System.IComparable with
+        member x.CompareTo(b) =
+            match b with
+            | :? sort as s ->
+                match x,s with
+                | PrimitiveSort(xName), PrimitiveSort(sName)
+                | PrimitiveSort(xName), CompoundSort(sName, _)
+                | CompoundSort(xName, _), PrimitiveSort(sName)
+                | CompoundSort(xName, _), CompoundSort(sName, _) ->
+                    xName.CompareTo(sName)
+            | _ ->  invalidArg "sort" "cannot compare value of different types"
+
 let (|ArraySort|_|) = function
     | CompoundSort("Array", [s1; s2]) -> Some(s1, s2)
     | _ -> None
@@ -210,6 +243,7 @@ let ArraySort(s1, s2) = CompoundSort("Array", [s1; s2])
 let boolSort = PrimitiveSort(symbol("Bool"))
 let integerSort = PrimitiveSort(symbol("Int"))
 let dummySort = PrimitiveSort(symbol("*dummy-sort*"))
+let emptySort = PrimitiveSort(symbol(" "))
 
 module Sort =
     let gensym = function
@@ -246,6 +280,7 @@ type operation =
         match x with
         | ElementaryOperation(s, _, _)
         | UserDefinedOperation(s, _, _) -> toString s
+
 type smtExpr =
     | Number of int64
     | BoolConst of bool
@@ -285,16 +320,54 @@ type smtExpr =
         | Exists(vars, body) ->
             $"(exists (%s{SortedVars.toString vars}) {body})"
 type function_def = symbol * sorted_var list * sort * smtExpr
+
+[<CustomEquality; CustomComparison>]
 type term =
     | TConst of ident * sort
     | TIdent of ident * sort
     | TApply of operation * term list
+    
+    member x.toSort() =
+        match x with
+        | TConst(_, xSort) -> xSort
+        | TIdent(_, xSort) -> xSort
+        | TApply(op, _) ->
+            match op with
+            | ElementaryOperation(_,_,opSort)
+            | UserDefinedOperation(_,_,opSort) ->
+                opSort
+
     override x.ToString() =
         match x with
         | TConst(name, _) -> name.ToString()
         | TIdent(name, _) -> name.ToString()
         | TApply(op, []) -> op.ToString()
         | TApply(f, xs) -> sprintf "(%O %s)" f (xs |> List.map toString |> join " ")
+        
+    override x.Equals(b) =
+        match b with
+        | :? term as t ->
+            match x,t with
+            | TConst(xName, xSort), TConst(tName, tSort) ->
+                xName.Equals(tName) && xSort.Equals(tSort)        
+            | TIdent(xName, xSort), TIdent(tName,tSort) ->
+                xName.Equals(tName) && xSort.Equals(tSort)
+            | _ -> false
+        | _ -> false
+
+    interface System.IComparable with
+        member x.CompareTo(b) =
+            match b with
+            | :? term as t ->
+                match x,t with
+                | TConst(xName, xSort), TConst(tName, tSort)
+                | TConst(xName, xSort), TIdent(tName, tSort)
+                | TIdent(xName, xSort), TConst(tName, tSort)
+                | TIdent(xName, xSort), TIdent(tName, tSort) ->
+                    let scomp = compare xSort tSort
+                    if not (scomp = 0) then scomp else xName.CompareTo(tName)
+                | _ -> invalidArg "term" "incomparable objects"
+            | _ ->  invalidArg "sort" "cannot compare value of different types"
 
 type atom =
     | Top
@@ -549,6 +622,7 @@ module Quantifiers =
 
 type rule =
     | Rule of quantifiers * atom list * atom
+    | Assertion of quantifiers * atom list
     override x.ToString() =
         match x with
         | Rule(qs, xs, x) ->
@@ -557,11 +631,42 @@ type rule =
             | [y] -> $"(=> {y}\n\t    {x})"
             | _ -> sprintf "(=>\t(and %s)\n\t\t%O)" (xs |> List.map toString |> join "\n\t\t\t") x
             |> Quantifiers.toString qs
+        | Assertion(qs, xs) ->
+            match xs with
+            | [] -> ""
+            | [y] -> $"{y}"
+            | _ -> sprintf "(and %s)" (xs |> List.map toString |> join "\n\t\t\t")
+            |> Quantifiers.toString qs
 let private baseRule q fromAtoms toAtom =
     let fromAtoms = List.filter ((<>) Top) fromAtoms
     Rule(q, fromAtoms, toAtom)
 let aerule forallVars existsVars fromAtoms toAtom = baseRule (Quantifiers.add (ExistsQuantifier existsVars) <| Quantifiers.forall forallVars) fromAtoms toAtom
 let rule vars fromAtoms toAtom = baseRule (Quantifiers.forall vars) fromAtoms toAtom
+
+type ruleCloser ( ) =
+    // TODO: remove copypast from synchronization.fs
+    member private x.CollectFreeVarsInTerm = function
+        | TIdent(i, s) -> [i, s]
+        | TConst _ -> []
+        | TApply(_, ts) -> x.CollectFreeVarsInTerms ts
+
+    member private x.CollectFreeVarsInTerms = List.collect x.CollectFreeVarsInTerm
+
+    member private x.CollectFreeVarsInAtom = function
+        | AApply(_, ts) -> x.CollectFreeVarsInTerms ts
+        | Equal (t1, t2) | Distinct (t1, t2) -> x.CollectFreeVarsInTerms [t1; t2]
+        | _ -> []    
+        
+    member x.MakeClosedRule(body, head) : rule =
+        // forall quantifiers around all vars        
+        let freeVars = head::body |> List.collect x.CollectFreeVarsInAtom |> Set.ofList |> Set.toList
+        rule freeVars body head
+        
+    member x.MakeClosedAssertion(body) : rule =
+        let freeVars = body |> List.collect x.CollectFreeVarsInAtom |> Set.ofList |> Set.toList
+        let qs = Quantifiers.forall freeVars
+        Assertion(qs, body)
+
 type definition =
     | DefineFun of function_def
     | DefineFunRec of function_def

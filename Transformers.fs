@@ -132,7 +132,8 @@ type FreeSortsTransformerProgram (options) =
         let commands = preambulizeCommands "UF" noADTSystem
         let commands = ClauseTransform.SubstituteLemmas.substituteLemmas commands
         let commands = Simplification.simplify trCtx.diseqs commands
-        List.map toString commands
+        let fols = trCtx.folPart
+        List.map toString commands @ List.map toString fols
 
 type PrologTransformerProgram (options) =
     inherit TransformerProgram(options)

@@ -31,6 +31,8 @@
         <Compile Include="Unifier.fs" />
         <Compile Include="Simplification.fs" />
         <Compile Include="Synchronization.fs" />
+        <Compile Include="Flattening.fs" />
+        <Compile Include="TTA.fs" />
         <Compile Include="SolverResult.fs" />
         <Compile Include="ClauseTransform.fs" />
         <Compile Include="PrintToProlog.fs" />

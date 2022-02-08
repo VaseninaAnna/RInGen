@@ -1,4 +1,5 @@
 module RInGen.ClauseTransform
+open System.Collections.Generic
 open RInGen
 open RInGen.IntToNat
 open RInGen.Typer
@@ -793,6 +794,9 @@ module SubstituteLemmas =
             |> List.map FOLOriginalCommand
         | OriginalCommand c -> [FOLOriginalCommand c]
         | TransformedCommand(Rule(qs, body, head)) -> mapRule lemmasMap qs body head |> folAssert |> Option.toList
+        | TransformedCommand(Assertion(qs, body)) ->
+            let folList = List.map (fun x -> FOLAtom(x)) body |> folAnd
+            [FOLAssertion(qs, folList)]
         | LemmaCommand _ -> []
 
     let private collectAllLemmas commands =
@@ -834,7 +838,12 @@ let toClauses (options : transformOptions) commands =
     let shouldAddNatPreamble, substFreeSortClauses = SubstituteFreeSortsWithNat.transformation freeSorts natSort adtEqs arrayTransformedClauses
     let clausesWithPreamble = if not alreadyAddedNatPreamble && shouldAddNatPreamble then natPreamble @ substFreeSortClauses else substFreeSortClauses
     let simplified = Simplify.simplify clausesWithPreamble
-    let trCtx = {commands=simplified; diseqs=snd adtEqs}
-    if not options.sync_terms then trCtx else
-    let syncClauses = Synchronization.synchronize clausesWithPreamble
-    {trCtx with commands = syncClauses}
+    if options.sync_terms then
+        let syncClauses = Synchronization.synchronize clausesWithPreamble
+        {commands=syncClauses; diseqs=snd adtEqs; folPart=[]}
+    else if options.tta_transform then
+        let flatClauses = Flattening.flatten clausesWithPreamble
+        let ttaClauses, fols = TTA.synchronize flatClauses
+        {commands = ttaClauses; diseqs=snd adtEqs; folPart=fols}
+    else
+        {commands=simplified; diseqs=snd adtEqs; folPart=[]}

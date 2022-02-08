@@ -27,6 +27,7 @@ module Operation =
     let makeElementaryOperationFromSorts name argSorts retSort = ElementaryOperation(name, argSorts, retSort)
     let makeElementaryRelationFromVars name vars = makeElementaryOperationFromVars name vars boolSort
     let makeElementaryRelationFromSorts name argSorts = makeElementaryOperationFromSorts name argSorts boolSort
+    let makeConstantFromSort name argSort = TConst(name, argSort)
 
     let declareOp = function
         | ElementaryOperation(name, argSorts, retSort) -> DeclareFun(name, argSorts, retSort)
