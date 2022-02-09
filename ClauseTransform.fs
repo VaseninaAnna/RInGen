@@ -836,5 +836,6 @@ let toClauses (options : transformOptions) commands =
     let simplified = Simplify.simplify clausesWithPreamble
     let trCtx = {commands=simplified; diseqs=snd adtEqs}
     if not options.sync_terms then trCtx else
-    let syncClauses = Synchronization.synchronize clausesWithPreamble
+    let syncClauses = TtaTransform.transform clausesWithPreamble
+    //let syncClauses = Synchronization.synchronize clausesWithPreamble
     {trCtx with commands = syncClauses}
